@@ -3,7 +3,8 @@ LUT University Machine Vision and Digital Image Analysis Spring Term 2025 - Prac
 
 Running the code for training:
 
-´´´python3 model_training.py --config configs/initial.yml --name initial´´´
+```python3 model_training.py --config configs/initial.yml --name initial```
 
 And for testing
-´´´python3 model_testing.py --config configs/initial.yml --name initial --quantized false´´´
+
+```python3 model_testing.py --config configs/initial.yml --name initial --quantized false```
