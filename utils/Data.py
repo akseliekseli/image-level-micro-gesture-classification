@@ -1,93 +1,113 @@
 import os
-import numpy as np
-import matplotlib.pyplot as plt
-import h5py
+import random
+from collections import defaultdict
+from torchvision import transforms
+from torch.utils.data import DataLoader, Dataset, random_split
+from PIL import Image
 
-import torch
-from torch.utils.data import DataLoader, TensorDataset, random_split
-from sklearn.manifold import TSNE
-from sklearn.decomposition import PCA
+# Define dataset path
+data_dir = "../data/training"
 
-from utils.DeepSets import DeepSetsClassifier
+# Parameters
+
+# Define image transformations
+transform = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+])
+
+# Custom Dataset Class
+class GestureDataset(Dataset):
+    def __init__(self, image_paths, labels, transform=None):
+        self.image_paths = image_paths
+        self.labels = labels
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.image_paths)
+
+    def __getitem__(self, idx):
+        img_path = self.image_paths[idx]
+        label = self.labels[idx]
+        image = Image.open(img_path).convert("RGB")
+        if self.transform:
+            image = self.transform(image)
+        return image, label
+
 
 class Data():
-
-    def __init__(self, params, directories, device):
-        '''
-        directories: (train, val) path to directory
-        device: torch.device
-        test: boolean, load only one file
-        '''
-        self.directories = directories
-        self.device = device
-        self.test = params['test']
-        self.pca_true = params['pca']
-
-
-    def print_features(self):
-        print(f'{self.data.keys()} \n')
-        print(f'{self.data["jetFeatureNames"][:]} \n')
-        print(f'{self.data["jetConstituentList"][:].shape} \n')
-        print(f'{self.data["particleFeatureNames"][:]} \n')
-        self.labels = self.data["jetConstituentList"][:]
-
-    def read_and_split_data(self, batch_size=32):
-        """
-        Splits the dataset into training, validation, and test sets.
-        """
-        self.train_dataset = self.read_files_from_directory(self.directories[0])
-        self.test_dataset = self.read_files_from_directory(self.directories[1])
-        self.split_data(batch_size) 
-        return self.train_loader, self.val_loader, self.test_loader, self.labels 
-
-
-
-    def read_files_from_directory(self, directory):
-        y_list = []
-        constituents_list = []
-        for idx, f in enumerate(os.listdir(directory)):
-            with h5py.File(directory + f, "r") as file:
-                self.data = file
-                if idx == 0:
-                    self.print_features()
-                    self.labels = self.data["jetFeatureNames"][:][-6:]
-                
-                y_list.append(torch.tensor(self.data['jets'][:], dtype=torch.float32)[:,-6:])
-                constituents_list.append(torch.tensor(self.data['jetConstituentList'][:], dtype=torch.float32))
-            if self.test: break
-        y = torch.cat(y_list, dim=0)
-        constituents = torch.cat(constituents_list, dim=0)
-        print(y.shape)
-        print(constituents.shape)
-        self.data_len = constituents.shape[0]
-        self.constituents_len = constituents.shape[1]
-        self.input_dim = constituents.shape[2]
-        self.output_dim = y.shape[1]
-        self.total_size_test = constituents.shape[0]
-        
-        if self.pca_true:
-            constituents, y = self.pca_for_data(constituents, y)
-        return TensorDataset(constituents, y) 
+    # Load dataset
     
-    def pca_for_data(self, constituents, y):
-        constituents_reshaped = constituents.view(-1, 16).cpu().numpy()
-        pca_components = 5
-        if not hasattr(self, 'pca'):
-            self.pca = PCA(n_components=pca_components)
-            constituents_pca = self.pca.fit_transform(constituents_reshaped)
-        else:
-            constituents_pca = self.pca.transform(constituents_reshaped)
-        constituents_pca_reshaped = constituents_pca.reshape(self.data_len, self.constituents_len, pca_components)
-        constituents = torch.tensor(constituents_pca_reshaped)
-        self.input_dim = pca_components 
-        return (constituents, y)
+    def __init__(self, data_dir, batch_size, splits):
+        self.data_dir = data_dir
+        self.BATCH_SIZE = batch_size
+        self.TRAIN_SPLIT = splits[0]
+        self.VAL_SPLIT = splits[1]
+        self.TEST_SPLIT = splits[2]
 
-    def split_data(self, batch_size):
+    def load_dataset(self):
+        event_dict = defaultdict(list)  # {event_id: [(img_path, class_label)]}
+        class_to_idx = {}  # {class_name (str): class_idx (int)}
+        class_counter = 0
+    
+        # Iterate over class folders
+        for class_name in os.listdir(self.data_dir):
+            class_path = os.path.join(self.data_dir, class_name)
+            if os.path.isdir(class_path):
+                if class_name not in class_to_idx:
+                    class_to_idx[class_name] = class_counter
+                    class_counter += 1
+    
+                # Get all images and group them by event
+                for img_name in os.listdir(class_path):
+                    if img_name.endswith(".jpg"):
+                        event_id = img_name.split('.')[0]  # Extract event ID
+                        img_path = os.path.join(class_path, img_name)
+                        event_dict[event_id].append((img_path, class_to_idx[class_name]))
+    
+        return event_dict, class_to_idx
+    
+    # Split dataset into train, val, test sets
+    def split_dataset(self, event_dict):
+        events = list(event_dict.keys())
+    
+        # Compute split sizes
+        total_events = len(events)
+        train_size = int(total_events * self.TRAIN_SPLIT)
+        val_size = int(total_events * self.VAL_SPLIT)
+    
+        # Assign events to sets
+        train_events = events[:train_size]
+        val_events = events[train_size:train_size + val_size]
+        test_events = events[train_size + val_size:]
+    
+        def get_images(event_list):
+            images, labels = [], []
+            for event_id in event_list:
+                for img_path, label in event_dict[event_id]:
+                    images.append(img_path)
+                    labels.append(label)
+            return images, labels
+    
+        return get_images(train_events), get_images(val_events), get_images(test_events)
+    
+    # Main Function
+    def get_dataloaders(self):
+        event_dict, class_to_idx = self.load_dataset()
+        print(event_dict)
+        (train_imgs, train_labels), (val_imgs, val_labels), (test_imgs, test_labels) = self.split_dataset(event_dict)
+    
+        # Create datasets
+        train_dataset = GestureDataset(train_imgs, train_labels, transform)
+        val_dataset = GestureDataset(val_imgs, val_labels, transform)
+        test_dataset = GestureDataset(test_imgs, test_labels, transform)
+    
+        # Create DataLoaders
+        train_loader = DataLoader(train_dataset, batch_size=self.BATCH_SIZE, shuffle=True)
+        val_loader = DataLoader(val_dataset, batch_size=self.BATCH_SIZE, shuffle=False)
+        test_loader = DataLoader(test_dataset, batch_size=self.BATCH_SIZE, shuffle=False)
+        print(f"Classes: {class_to_idx}")
+        print(f"Train: {len(train_loader.dataset)}, Val: {len(val_loader.dataset)}, Test: {len(test_loader.dataset)}")
+    
+        return train_loader, val_loader, test_loader, class_to_idx
 
-        val_size = int(self.total_size_test * 0.5)
-        test_size = self.total_size_test - val_size
-        self.val_dataset, self.test_dataset = random_split(self.test_dataset, [val_size, test_size])
-        
-        self.train_loader = DataLoader(self.train_dataset, batch_size=batch_size, shuffle=False)
-        self.val_loader = DataLoader(self.val_dataset, batch_size=batch_size, shuffle=False)
-        self.test_loader = DataLoader(self.test_dataset, batch_size=batch_size, shuffle=False)
