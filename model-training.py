@@ -2,89 +2,132 @@ import argparse
 import yaml
 import time
 import requests
+from collections import Counter
 
 import numpy as np
 import torch
 import torch.nn as nn
-from utils.Data import Data
+import torch.optim as optim
+import torch.nn.functional as F
 from PIL import Image
 from torchvision import transforms, models
 from torch.utils.data import Dataset, DataLoader
-import lightning as pl
+import pytorch_lightning as pl
 from lightning.pytorch import Trainer
+from lightning.pytorch.loggers import TensorBoardLogger
 
+from torchvision import datasets, transforms
+from torch.utils.data import DataLoader, random_split
+
+from sklearn.metrics import confusion_matrix
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+from utils.Data import Data
+from utils.GestureDataModule import GestureDataModule
+from utils.GestureResNet import GestureResNet
+from utils.GestureSwinV2 import GestureSwinV2
+
+def predict(model, dataloader):
+    model.eval()
+    all_preds = []
+    all_labels = []
+    
+    with torch.no_grad():
+        for batch in dataloader:
+            images, labels = batch
+
+            outputs = model.forward(images.to(DEVICE))
+            preds = outputs.argmax(dim=1)
+            
+            # Collect predictions and true labels
+            all_preds.extend(preds.cpu().numpy())
+            all_labels.extend(labels.cpu().numpy())
+    all_preds = np.array(all_preds)
+    all_labels = np.array(all_labels)
+    
+    accuracy = np.mean(all_preds == all_labels)
+    print(f'ACCURACY: {accuracy}')
+
+    return np.array(all_preds), np.array(all_labels)
+
+
+def plot_confusion_matrix(preds, labels):
+    cm = confusion_matrix(labels, preds)
+    cm_percent = cm.astype('float') / cm.sum(axis=1, keepdims=True)  # Convert to percentages
+    
+    plt.figure(figsize=(18, 12))
+    sns.heatmap(cm_percent, annot=True, fmt='.2f', cmap='Blues', cbar=True)
+    plt.xlabel('Predicted')
+    plt.ylabel('True')
+    plt.title('Confusion Matrix (Percentage Heatmap)')
+    plt.savefig("confusion_big.png")
+    plt.close()
+
+
+
+transform = transforms.Compose([
+    #transforms.Resize((112, 112)),  # Resize to ResNet input size
+    #transforms.RandomHorizontalFlip(),
+    #transforms.RandomRotation(20),
+    transforms.ToTensor(),          # Convert to PyTorch tensor
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # Normalize like ImageNet
+])
 
 # Device Configuration
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-class ResNetLightning(pl.LightningModule):
-    def __init__(self, num_classes):
-        super(ResNetLightning, self).__init__()
-        self.model = models.resnet18(pretrained=True)
-
-        # Modify classifier layer
-        self.model.fc = nn.Linear(self.model.fc.in_features, num_classes)
-
-        # Define loss function
-        self.criterion = nn.CrossEntropyLoss()
-
-    def forward(self, x):
-        return self.model(x)
-
-    def training_step(self, batch, batch_idx):
-        images, labels = batch
-        outputs = self(images)
-        loss = self.criterion(outputs, labels)
-
-        # Log loss and accuracy
-        acc = (outputs.argmax(dim=1) == labels).float().mean()
-        self.log("train_loss", loss, prog_bar=True)
-        self.log("train_acc", acc, prog_bar=True)
-
-        return loss
-
-    def validation_step(self, batch, batch_idx):
-        images, labels = batch
-        outputs = self(images)
-        loss = self.criterion(outputs, labels)
-
-        acc = (outputs.argmax(dim=1) == labels).float().mean()
-        self.log("val_loss", loss, prog_bar=True)
-        self.log("val_acc", acc, prog_bar=True)
-
-    def configure_optimizers(self):
-        optimizer = optim.Adam(self.parameters(), lr=1e-4)
-        return optimizer
-
-    
-
 if __name__ == "__main__":
-    data_dir = "data/training"
-    data = Data(data_dir, 16, (0.7, 0.15, 0.15))
-    train_loader, val_loader, test_loader, class_to_idx = data.get_dataloaders()
     
+    torch.set_num_threads(8)
+    torch.cuda.empty_cache()
+
+    data_dir = "data_pruned/"
+
+    logger = TensorBoardLogger("logs", name="resnet-no-leak")
+
+    #data_module = GestureDataModule(data_dir=data_dir, batch_size=16, splits=(0.7, 0.15, 0.15))
     
-    # Instantiate the model
-    num_classes = class_to_idx
-    model = ResNetLightning(num_classes)
+    #num_classes = len(data_module.data_obj.get_dataloaders()[3])
+    #class_weights = data_module.data_obj.get_dataloaders()[4]
+    dataset = datasets.ImageFolder(root=data_dir, transform=transform)
+
+    # Define split sizes (80% train, 10% val, 10% test)
+    train_size = int(0.7 * len(dataset))
+    val_size = int(0.15 * len(dataset))
+    test_size = len(dataset) - train_size - val_size  # Ensure total length matches
     
-    # Define the trainer
-    trainer = Trainer(
-        max_epochs=10,
+    # Split dataset
+    train_dataset, val_dataset, test_dataset = random_split(dataset, [train_size, val_size, test_size])
+    
+    # Create DataLoaders
+    train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True, num_workers=4, pin_memory=True, persistent_workers=True)
+    val_loader = DataLoader(val_dataset, batch_size=8, shuffle=False, num_workers=4, pin_memory=True, persistent_workers=True)
+    test_loader = DataLoader(test_dataset, batch_size=8, shuffle=False, num_workers=4, pin_memory=True, persistent_workers=True)
+    
+    class_counts = Counter([label for _, label in dataset.samples])
+    num_classes = len(class_counts)
+    # Compute inverse frequency weights
+    class_weights = {cls: 1.0 / count for cls, count in class_counts.items()}
+    class_weights = torch.tensor([class_weights[i] for i in range(num_classes)], dtype=torch.float32)
+
+
+
+    model = GestureResNet(num_classes)
+    #model.set_weights(class_weights)
+
+    trainer = pl.Trainer(
+        max_epochs=200,
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
-        log_every_n_steps=10
+        devices=1,
+        logger=logger
     )
-    
-    # Train the model
+
     trainer.fit(model, train_loader, val_loader)
-    
-    trainer.validate(model, test_loader)
 
-    # Save model
-    trainer.save_checkpoint("resnet_model.ckpt")
+    trainer.test(model, test_loader)
 
-    # Load model
-    model = ResNetLightning.load_from_checkpoint("resnet_model.ckpt", num_classes=num_classes)
-    model.eval()
-
+    checkpoint_path = "gesture_model_no_leak.ckpt"
+    trainer.save_checkpoint(checkpoint_path)
+    print(f"Model saved to {checkpoint_path}")
 
