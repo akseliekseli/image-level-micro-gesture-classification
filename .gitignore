@@ -1,2 +1,7 @@
 data/
-
+*.ckpt
+logs/
+lightning_logs/
+data_pruned/
+keypoint_cache/
+training.zip
