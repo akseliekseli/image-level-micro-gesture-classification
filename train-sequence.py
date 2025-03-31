@@ -1,26 +1,17 @@
-
 import argparse
-import yaml
-import time
-from collections import Counter
 import random
-
+import json
+import os
 import numpy as np
+
 import torch
 import torch.nn as nn
-import torch.optim as optim
-import torch.nn.functional as F
-from PIL import Image
-from torchvision import transforms, models
-from torch.utils.data import Dataset, DataLoader
+from torchvision import transforms
 import pytorch_lightning as pl
-from lightning.pytorch import Trainer
 from lightning.pytorch.loggers import TensorBoardLogger
-
-from torchvision import datasets, transforms
-from torch.utils.data import DataLoader, random_split
-
 from sklearn.metrics import confusion_matrix
+import torch.multiprocessing as mp
+
 import seaborn as sns
 import matplotlib.pyplot as plt
 
@@ -120,31 +111,18 @@ if __name__ == "__main__":
 
     logger = TensorBoardLogger("logs", name=args.model)
 
-    
-    dataset = datasets.ImageFolder(root=data_dir, transform=transform)
+    data_dir = "data/training"
+    if args.model == 'pose': keypoints = 'keypoints_112.json'
+    else: keypoints = None
+    train_loader, val_loader, test_loader, num_classes = get_dataloaders("data/training", keypoints, batch_size=16, transform=transform)
 
-    # Define split sizes (80% train, 10% val, 10% test)
-    train_size = int(0.8 * len(dataset))
-    val_size = int(0.1 * len(dataset))
-    test_size = len(dataset) - train_size - val_size  # Ensure total length matches
-    
-    # Split dataset
-    train_dataset, val_dataset, test_dataset = random_split(dataset, [train_size, val_size, test_size])
-    
-    
-    class_counts = Counter([label for _, label in dataset.samples])
-    num_classes = len(class_counts)
-    # Compute inverse frequency weights
-    class_weights = {cls: 1.0 / count for cls, count in class_counts.items()}
-    class_weights = torch.tensor([class_weights[i] for i in range(num_classes)], dtype=torch.float32)
-
-    train_loader, val_loader, test_loader = get_dataloaders("data/training",keypoints_file="keypoints_112.json", transform=transform, batch_size=8)
     print(f'NUM CLASSES {num_classes}')
+    
+    model_path = "models/"+args.model+".ckpt"
 
     if args.model == 'resnet': model = GestureResNet3D(num_classes)
     elif args.model == 'swin': model = GestureSwin3D(num_classes)
-    elif args.model == 'pose': model = GestureSwin3DWithPose(num_classes)
-    #model.set_weights(class_weights)
+    elif args.model == 'pose': model = GestureSwin3DWithPose(num_classes)   
 
     trainer = pl.Trainer(
         max_epochs=args.epochs,

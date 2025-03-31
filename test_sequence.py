@@ -1,24 +1,18 @@
 import argparse
 import random
 import torch
-import pytorch_lightning as pl
-from torchvision import models
-import torch.nn.functional as F
 import numpy as np
-from PIL import Image
 from torch.utils.data import DataLoader
-from torchvision import datasets, transforms
-
+from torchvision import transforms
 from sklearn.metrics import confusion_matrix
 import seaborn as sns
 import matplotlib.pyplot as plt
 
-from utils.GestureResNet import GestureResNet
 from utils.GestureResNet3D import GestureResNet3D
+from utils.GestureSwin3D import GestureSwin3D
 from utils.GestureSequenceDataset import get_dataloaders
 from utils.GestureSwin3DWithPose import GestureSwin3DWithPose
 
-from collections import Counter
 
 transform = transforms.Compose([
     transforms.Resize((112, 112)),  # Resize to ResNet input size
@@ -37,7 +31,6 @@ def predict(model, dataloader):
     with torch.no_grad():
         for batch in dataloader:
             images, labels = batch
-            print('ii')
             outputs = model.forward(images.to(DEVICE))
             preds = outputs.argmax(dim=1)
             
@@ -108,27 +101,13 @@ if __name__ == "__main__":
     torch.cuda.empty_cache()
     
     data_dir = "data/training"
-    dataset = datasets.ImageFolder(root=data_dir, transform=transform)
+    if args.model == 'pose': keypoints = 'keypoints_112.json'
+    else: keypoints = None
+    train_loader, val_loader, test_loader, num_classes = get_dataloaders("data/training", keypoints, batch_size=16, transform=transform)
 
-    # Define split sizes (80% train, 10% val, 10% test)
-    train_size = int(0.8 * len(dataset))
-    val_size = int(0.1 * len(dataset))
-    test_size = len(dataset) - train_size - val_size  # Ensure total length matches
-    
-    # Split dataset
-    train_dataset, val_dataset, test_dataset = random_split(dataset, [train_size, val_size, test_size])
-    
-    class_counts = Counter([label for _, label in dataset.samples])
-    num_classes = len(class_counts)
-    # Compute inverse frequency weights
-    class_weights = {cls: 1.0 / count for cls, count in class_counts.items()}
-    class_weights = torch.tensor([class_weights[i] for i in range(num_classes)], dtype=torch.float32)
-
-    train_loader, val_loader, test_loader = get_dataloaders("data/training", 'keypoints_112.json', batch_size=16, transform=transform)
     print(f'NUM CLASSES {num_classes}')
-    model = GestureResNet3D(num_classes)
     
-    model_path = "models/"+args.model+"112.ckpt"
+    model_path = "models/"+args.model+".ckpt"
 
     if args.model == 'resnet': model = GestureResNet3D(num_classes)
     elif args.model == 'swin': model = GestureSwin3D(num_classes)
@@ -136,6 +115,7 @@ if __name__ == "__main__":
     
     model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu'))["state_dict"], strict=False)
     model.to(DEVICE)
+    
     if args.model == 'pose': predictions, ground_truth = predict_pose(model, test_loader)
     else: predictions, ground_truth = predict(model, test_loader)
     

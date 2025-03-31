@@ -3,10 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 import pytorch_lightning as pl
 import torchmetrics
-from transformers import AutoProcessor, RTDetrForObjectDetection, AutoImageProcessor, VitPoseForPoseEstimation
 from torchvision.models.video import swin3d_t, Swin3D_T_Weights
-from PIL import Image
-import numpy as np
 
 
 class GestureSwin3DWithPose(pl.LightningModule):
