@@ -23,5 +23,5 @@ def plot_class_distribution(data_dir):
     plt.close()
 
 # Example usage:
-plot_class_distribution("data_pruned")
+plot_class_distribution("data/training")
 
