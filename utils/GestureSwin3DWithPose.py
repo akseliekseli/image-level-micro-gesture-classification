@@ -3,10 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 import pytorch_lightning as pl
 import torchmetrics
-from transformers import AutoProcessor, RTDetrForObjectDetection, AutoImageProcessor, VitPoseForPoseEstimation
 from torchvision.models.video import swin3d_t, Swin3D_T_Weights
-from PIL import Image
-import numpy as np
 
 
 class GestureSwin3DWithPose(pl.LightningModule):
@@ -19,7 +16,6 @@ class GestureSwin3DWithPose(pl.LightningModule):
             param.requires_grad = False
         
         num_ftrs = self.model.head.in_features
-        print(f"num_ftrs: {num_ftrs}")  # Debugging
         self.model.head = nn.Sequential(
             nn.Linear(num_ftrs, 512)
         )
@@ -27,7 +23,10 @@ class GestureSwin3DWithPose(pl.LightningModule):
         self.classifier = nn.Sequential(
                         nn.Linear(512 + 34, 1028),
                         nn.ReLU(),
-                        nn.Linear(1028, num_classes)
+                        nn.Dropout(0.2),
+                        nn.Linear(1028, 512),
+                        nn.ReLU(),
+                        nn.Linear(512, num_classes)
         )
         for param in self.model.head.parameters():
             param.requires_grad = True
@@ -65,6 +64,15 @@ class GestureSwin3DWithPose(pl.LightningModule):
         acc = self.accuracy(outputs, labels)
         self.log("val_loss", loss, sync_dist=True)
         self.log("val_acc", acc, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
+        return loss
+    
+    def test_step(self, batch, batch_idx):
+        videos, keypoints, labels = batch
+        outputs = self((videos, keypoints))
+        loss = self.loss_fn(outputs, labels)
+        acc = self.accuracy(outputs, labels)
+        self.log("test_loss", loss, sync_dist=True)
+        self.log("test_acc", acc, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
         return loss
     
     def configure_optimizers(self):

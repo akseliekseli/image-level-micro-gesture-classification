@@ -12,14 +12,11 @@ class GestureResNet3D(pl.LightningModule):
         super(GestureResNet3D, self).__init__()
         self.save_hyperparameters()
 
-        # Load pre-trained ResNet3D-18
         self.model = r3d_18(weights=R3D_18_Weights.DEFAULT)
-        
-        # Freeze all layers except the last fully connected layer
+        #Freeze the layers
         for param in self.model.parameters():
             param.requires_grad = False
         
-        # Modify the last fully connected layer for classification
         num_ftrs = self.model.fc.in_features
         self.model.fc = nn.Sequential(
             nn.Linear(num_ftrs, 512),
@@ -30,8 +27,7 @@ class GestureResNet3D(pl.LightningModule):
             nn.Dropout(0.2),
             nn.Linear(512, num_classes)
         )
-        
-        # Unfreeze only the new layers
+        #Unfreeze last layer 
         for param in self.model.fc.parameters():
             param.requires_grad = True
         
@@ -83,7 +79,6 @@ class GestureResNet3D(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = optim.Adam(self.parameters(), lr=self.learning_rate)
     
-        # Reduce LR when validation loss stops improving
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, mode="min", patience=3, factor=0.9, verbose=True
         )
@@ -92,7 +87,7 @@ class GestureResNet3D(pl.LightningModule):
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler,
-                "monitor": "val_loss",  # Monitor validation loss
+                "monitor": "val_loss",  
                 "interval": "epoch",
                 "frequency": 1,
             },
