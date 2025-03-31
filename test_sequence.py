@@ -1,9 +1,10 @@
+import argparse
+import random
 import torch
 import pytorch_lightning as pl
 from torchvision import models
 import torch.nn.functional as F
 import numpy as np
-from utils.GestureDataModule import GestureDataModule
 from PIL import Image
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
@@ -14,9 +15,8 @@ import matplotlib.pyplot as plt
 
 from utils.GestureResNet import GestureResNet
 from utils.GestureResNet3D import GestureResNet3D
-from utils.GestureSwinV2 import GestureSwinV2
 from utils.GestureSequenceDataset import get_dataloaders
-
+from utils.GestureSwin3DWithPose import GestureSwin3DWithPose
 
 from collections import Counter
 
@@ -55,6 +55,29 @@ def predict(model, dataloader):
     return np.array(all_preds), np.array(all_labels)
 
 
+def predict_pose(model, dataloader):
+    model.eval()
+    all_preds = []
+    all_labels = []
+    
+    with torch.no_grad():
+        for batch in dataloader:
+            images, keypoints, labels = batch
+            outputs = model.forward((images.to(DEVICE), keypoints.to(DEVICE)))
+            preds = outputs.argmax(dim=1)
+            
+            # Collect predictions and true labels
+            all_preds.extend(preds.cpu().numpy())
+            all_labels.extend(labels.cpu().numpy())
+
+            torch.cuda.empty_cache()
+    all_preds = np.array(all_preds)
+    all_labels = np.array(all_labels)
+    
+    accuracy = np.mean(all_preds == all_labels)
+    print(f'ACCURACY: {accuracy}')
+
+    return np.array(all_preds), np.array(all_labels)
 
 def plot_confusion_matrix(preds, labels):
     cm = confusion_matrix(labels, preds)
@@ -74,6 +97,13 @@ from torch.utils.data import DataLoader, random_split
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Testing the Micro-Gesture model")
+    parser.add_argument('--model', type=str, required=True, help='model to test')
+    args = parser.parse_args()
+    
+    torch.manual_seed(0)
+    random.seed(0)
+    np.random.seed(0)
     torch.set_num_threads(8)
     torch.cuda.empty_cache()
     
@@ -88,27 +118,26 @@ if __name__ == "__main__":
     # Split dataset
     train_dataset, val_dataset, test_dataset = random_split(dataset, [train_size, val_size, test_size])
     
-    # Create DataLoaders
-    #train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=4, pin_memory=True, persistent_workers=True)
-    #val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False, num_workers=4, pin_memory=True, persistent_workers=True)
-    #test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False, num_workers=4, pin_memory=True, persistent_workers=True)
-    
     class_counts = Counter([label for _, label in dataset.samples])
     num_classes = len(class_counts)
     # Compute inverse frequency weights
     class_weights = {cls: 1.0 / count for cls, count in class_counts.items()}
     class_weights = torch.tensor([class_weights[i] for i in range(num_classes)], dtype=torch.float32)
 
-    train_loader, val_loader, test_loader = get_dataloaders("data/training", batch_size=16, transform=transform)
+    train_loader, val_loader, test_loader = get_dataloaders("data/training", 'keypoints_112.json', batch_size=16, transform=transform)
     print(f'NUM CLASSES {num_classes}')
     model = GestureResNet3D(num_classes)
     
-    model_path = 'gesture_model_video_resnet_long.ckpt'
+    model_path = "models/"+args.model+"112.ckpt"
 
-    model = GestureResNet3D(num_classes=num_classes)
+    if args.model == 'resnet': model = GestureResNet3D(num_classes)
+    elif args.model == 'swin': model = GestureSwin3D(num_classes)
+    elif args.model == 'pose': model = GestureSwin3DWithPose(num_classes)
+    
     model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu'))["state_dict"], strict=False)
     model.to(DEVICE)
-    predictions, ground_truth = predict(model, test_loader)
+    if args.model == 'pose': predictions, ground_truth = predict_pose(model, test_loader)
+    else: predictions, ground_truth = predict(model, test_loader)
     
     plot_confusion_matrix(predictions, ground_truth)
 
