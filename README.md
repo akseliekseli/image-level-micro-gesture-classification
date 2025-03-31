@@ -11,7 +11,6 @@ Install required packages:
 
 Running the code for training:
 
-
 ```python3 train-model.py --model swin --gpu 2 --epochs 30```
 where model: swin, resnet, pose
     gpu: number of which gpu to use (cuda:0, cuda:1 etc.)
@@ -21,8 +20,5 @@ And for testing:
 
 ``` python3 test-model.py --model swin --test_dir test/```
 for same model parameters as above and directory of the test samples.
-
-```python3 train_sequence.py --model pose/resnet/swin --gpu 0,1,2,3 --epochs 10```
-
 
 For the 30% of the best accuracies, the Swin model should be used in our case. 
